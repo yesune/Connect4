@@ -8,12 +8,13 @@ import time
 import os
 import warnings
 import copy
+import pdb
 
 # just to see how long this code takes
 start_time = time.time()
 
 # read in the data
-data = pd.read_csv("Connect4\connect-4.data")
+data = pd.read_csv("connect-4.data")
 
 # convert data into numerical values
 data.replace({'b': 0, 'x': 1, 'o': -1, 'win': 1, 'loss': -1, 'draw' : 0}, inplace=True)
@@ -38,7 +39,7 @@ if os.path.exists('finalized_model.joblib'):
     clf = joblib.load('finalized_model.joblib')
     warnings.filterwarnings("ignore", category=UserWarning)
 else:
-    clf = svm.SVC()
+    clf = svm.SVC(probability = True)
     print("begin training")
     clf.fit(X_train, y_train) 
     print("End training")
@@ -54,6 +55,7 @@ print("Elapsed time: {} seconds".format(elapsed_time))
 gamestate = [[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]
 # Find out whose turn it is
 user_turn = int(input("If you start, enter 1. Else, enter 0: "))
+ai_started = user_turn == 0
 turn = True
 if user_turn == 0:
     turn = False
@@ -118,96 +120,199 @@ def removePiece(user_input, gamestate):
     return False
 
 # Simulating future gamestates to see which move is the best
-def predict_best_move(gamestate, depth):
+def predict_best_move(state, depth):
     if depth == 0:
-        return clf.predict(gamestate)[0]
+        return clf.predict(state)[0]
         
     good_column = [0] * 7
+
     # best_score = -math.inf if max_player else math.inf
     for i in range(1, 8):
-        if not addpiece(i, gamestate, 1):
-            good_column[i-1] -= math.inf
+        if not addpiece(i, state, 1):
+            good_column[i-1] = -math.inf
             continue
-        if gamedone(gamestate, 1):
-            score = math.inf
-            break
+        if gamedone(state, 1):
+            return i -1
         for j in range(1, 8):
-            if not addpiece(j, gamestate, -1):
+            if not addpiece(j, state, -1):
                 continue
-            score = clf.predict(gamestate)[0]
-            if gamedone(gamestate, -1):
-                score = -math.inf
-            good_column[i - 1] += score
+            if gamedone(state, -1): # other player can win off this
+                good_column[i-1] = -100000
+                removePiece(j, state)
+                continue
             for k in range(1, 8):
-                # basically has negative infinity
-                if good_column[i-1] < -100:
+                #if good_column[i-1] < -100:
+                #    continue
+                if not addpiece(k, state, 1):
                     continue
-                if not addpiece(k, gamestate, 1):
-                    continue
-                for l in range(1, 8):
-                    if not addpiece(l, gamestate, -1):
-                        continue
-                    score = clf.predict(gamestate)[0]
-                    if gamedone(gamestate, -1):
-                        score = -math.inf
-                    good_column[i - 1] += score
-                    removePiece(l, gamestate)
-                removePiece(k, gamestate)
-            removePiece(j, gamestate)
-        removePiece(i, gamestate)
+                if gamedone(state, 1):
+                    print("game done", j, k)
+                    for b in range(6):
+                        for a in range(7):
+                            print4(state[0][6 * a + 6 - b - 1])
+                        print("")
+                    print("-------------")
+                    print("1 2 3 4 5 6 7")
+                    freeWin = True
+                    removePiece(k, state)
+                    removePiece(j, state)
+                    for n in range(1, 8):
+                        if not addpiece(n, state, -1):
+                            continue
+                        hasWin = False
+                        for m in range(1, 8):
+                            if not addpiece(m, state, 1):
+                                continue
+                            if gamedone(state, 1):
+                                hasWin = True
+                                print(n, m)
+                                removePiece(m, state)
+                                break
+                            removePiece(m, state)
+                        if not hasWin:
+                            freeWin = False
+                            removePiece(n, state)
+                            break
+                        removePiece(n, state)
+                    if freeWin:
+                        return i - 1
+                    addpiece(j, state, -1)
+                    addpiece(k, state, 1)
 
+                for l in range(1, 8):
+                    if not addpiece(l, state, -1):
+                        continue
+                    score = clf.predict(state)[0]
+                    if gamedone(state, -1):
+                        score = -100000
+                    good_column[i - 1] += score
+                    removePiece(l, state)
+                removePiece(k, state)
+            removePiece(j, state)
+        removePiece(i, state)
+
+    print("My predictions", good_column)
     return good_column.index(max(good_column)) + 1
 
+def predict_best_move_rec(state, depth, playerStarted):
+    if depth != 0:
+        print(depth)
+        char = -1
+        if not playerStarted:
+            depth -= 1
+            char = 1
+        else:
+            test = clf.predict(state)[0]
+            if test == -1:
+                return -1, 3
+        a = []
+        for i in range(1, 8):
+            success = addpiece(i, state, char)
+            if success:
+                if gamedone(state, i):
+                    a.append(1)
+                score, _ = predict_best_move_rec(state, depth, not playerStarted)
+                a.append(score)
+            else:
+                a.append(0)
+            removePiece(i, state)
+        print(a)
+        return sum(a), a.index(max(a)) + 1
+    else:
+        return clf.predict(state)[0], -1
 
+def minimax(state, depth, alpha, beta, maximizingPlayer):
+    if depth == 0:
+        return get_score(state), 3
+    if gamedone(state, 1):
+        return math.inf, 3
+    if gamedone(state, -1):
+        return -1 * math.inf, 3
+    
+    if maximizingPlayer:
+        best_move = -1
+        max_eval = -1 * math.inf
+        for i in range (1, 8):
+            temp_state = copy.deepcopy(state)
+            if addpiece(i, temp_state, 1):
+                eval, _ = minimax(temp_state, depth - 1, alpha, beta, False)
+                if eval > max_eval:
+                    max_eval = eval
+                    best_move = i
+                alpha = max(alpha, max_eval)
+                if beta <= alpha:
+                    break
+        return max_eval, best_move
+
+    else:  # Minimizing player (opponent)
+        best_move = -1
+        min_eval = math.inf
+        for i in range(1, 8):
+            temp_state = copy.deepcopy(state)
+            if addpiece(i, temp_state, -1):
+                eval_score, _ = minimax(temp_state, depth - 1, alpha, beta, True)
+                if eval_score < min_eval:
+                    min_eval = eval_score
+                    best_move = i
+                beta = min(beta, min_eval)
+                if beta <= alpha:
+                    break
+        return min_eval, best_move
+
+def get_score(state):
+    res = clf.predict_proba(state)
+    return res[0][2] - res[0][0]
 
 # Takes in user input, adds it to gamestate, predicts best move
 while True:
 
     print("\n")
     # predict
-    if(turn == True):
+    if turn == False:
         temp_gamestate = copy.deepcopy(gamestate)
-        print("I suggest going ", predict_best_move(temp_gamestate, 4))
+        _, best_move = minimax(temp_gamestate, 6, -math.inf, math.inf, True)
+        print("I went", best_move)
+        addpiece(best_move, gamestate, 1)
+        if gamedone(gamestate, 1):
+            for j in range(6):
+                for i in range(7):
+                    print4(gamestate[0][6 * i + 6 - j - 1])
+                print("")
+            print("-------------")
+            print("1 2 3 4 5 6 7")
+            print("Player X won")
+            exit()
+    else:
+        # print out what the gamestate looks like
+        for j in range(6):
+            for i in range(7):
+                print4(gamestate[0][6 * i + 6 - j - 1])
+            print("")
+        print("-------------")
+        print("1 2 3 4 5 6 7")
 
-    # print out what the gamestate looks like
-    for j in range(6):
-        for i in range(7):
-            print4(gamestate[0][6 * i + 6 - j - 1])
-        print("")
-    print("-------------")
-    print("1 2 3 4 5 6 7")
-
-    # check who's turn
-    char = 1
-    if(turn == False):
+        # check who's turn
         char = -1
-        print("It is O's turn")
-    if(turn == True):
-        char = 1
-        print("It is X's turn")
 
-    # ask for user input
-    user_input = int(input("Enter a position:"))
-    
-    # exit condition
-    if user_input == -1:
-        break
+        # ask for user input
+        user_input = int(input("Enter a position:"))
+        
+        # exit condition
+        if user_input == -1:
+            break
 
-    if user_input > 7 or user_input < 1:
-        continue
+        if user_input > 7 or user_input < 1:
+            continue
 
-    # add the piece
-    if not addpiece(user_input, gamestate, char):
-        print("Column is full!")
-        continue
+        # add the piece
+        if not addpiece(user_input, gamestate, char):
+            print("Column is full!")
+            continue
 
-    # check for win
-    if gamedone(gamestate, 1):
-        print("Player X won")
-        exit()
-    if gamedone(gamestate, -1):
-        print("Player O won")
-        exit()
+        # check for win
+        if gamedone(gamestate, -1):
+            print("Player O won")
+            exit()
 
     # swap the piece
     turn = not turn
